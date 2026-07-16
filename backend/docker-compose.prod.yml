@@ -1,0 +1,175 @@
+# Production Docker Compose Configuration
+# Note: For production, use Kubernetes or a managed container orchestration service
+# This is provided for reference and small-scale production deployments
+#
+# Start with: docker-compose -f docker-compose.prod.yml up -d
+# Stop with: docker-compose -f docker-compose.prod.yml down
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database (Primary)
+  postgres:
+    image: postgres:15-alpine
+    container_name: ragsec-postgres-prod
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      # PostgreSQL performance tuning
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c effective_cache_size=1GB -c work_mem=16MB"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragsec-network
+    restart: always
+    # Production: Consider using managed database instead
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ragsec-redis-prod
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragsec-network
+    restart: always
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 1G
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:latest
+    container_name: ragsec-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - app
+    networks:
+      - ragsec-network
+    restart: always
+
+  # RAG-Sec Backend Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ragsec-backend-prod
+    environment:
+      # Application Settings
+      HOST: 0.0.0.0
+      PORT: 8000
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+
+      # Database Configuration
+      DB_ENGINE: postgresql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+
+      # SQLite Sandbox
+      SQLITE_DB_PATH: /data/sandbox.db
+
+      # Redis Configuration
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+
+      # Security Settings
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+
+      # Cryptography
+      HSM_KEY_ROTATION_MINUTES: 5
+      ENABLE_HSM_SIMULATION: "false"  # Use real HSM in production
+
+      # Features
+      ENABLE_HONEY_TABLE_DETECTION: "true"
+      ENABLE_DECEPTION_ROUTING: "true"
+      ENABLE_REQUEST_LOGGING: "true"
+
+      # CORS (restrict in production)
+      CORS_ORIGINS: '["https://yourdomain.com"]'
+    
+    # Do not expose port directly in production
+    # ports:
+    #   - "8000:8000"
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    volumes:
+      - app_data:/data
+      - app_logs:/var/log/app
+    
+    networks:
+      - ragsec-network
+    
+    restart: always
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    
+    # Resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 1G
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  app_data:
+    driver: local
+  app_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+
+networks:
+  ragsec-network:
+    driver: bridge

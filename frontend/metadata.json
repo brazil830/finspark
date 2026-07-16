@@ -1,0 +1,6 @@
+{
+  "name": "RAG-Sec Standalone",
+  "description": "Zero-Trust Runtime Security Framework protecting AI Agents before database access",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
